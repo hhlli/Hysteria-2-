@@ -63,7 +63,7 @@ modify_config() {
 
 # 3. 安装功能
 install_anytls() {
-    read -p "设置域名 (如 dc1.767667.xyz): " DOMAIN
+    read -p "设置域名 (请输入域名): " DOMAIN
     read -p "设置端口 (默认 4430): " PORT
     PORT=${PORT:-4430}
     
