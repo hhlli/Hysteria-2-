@@ -1,146 +1,105 @@
 #!/bin/bash
 
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 检查权限
-[[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 权限运行此脚本!${NC}" && exit 1
+[[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 权限!${NC}" && exit 1
 
-# 检查安装状态
 check_status() {
-    if [ -f "/usr/local/bin/tuic-server" ]; then
-        if systemctl is-active --quiet tuic; then
-            echo -e "TUIC v5 状态: ${GREEN}运行中${NC}"
-        else
-            echo -e "TUIC v5 状态: ${YELLOW}已安装，但未运行${NC}"
-        fi
-    else
-        echo -e "TUIC v5 状态: ${RED}未安装${NC}"
-    fi
+    systemctl is-active --quiet tuic && echo -e "状态: ${GREEN}运行中${NC}" || echo -e "状态: ${RED}未安装或停止${NC}"
 }
 
-# 安装功能
+view_config() {
+    if [ ! -f "/etc/tuic/config.json" ]; then
+        echo -e "${RED}配置文件不存在!${NC}"
+        return
+    fi
+    PORT=$(grep '"server":' /etc/tuic/config.json | awk -F: '{print $NF}' | tr -d '", ')
+    UUID=$(grep -oE '[a-z0-9-]{36}' /etc/tuic/config.json | head -1)
+    TOKEN=$(grep -A 1 "$UUID" /etc/tuic/config.json | grep -v "$UUID" | tr -d '":, ')
+    
+    echo -e "${GREEN}=== 当前 TUIC v5 配置 ===${NC}"
+    echo -e "监听端口: ${YELLOW}$PORT${NC}"
+    echo -e "UUID: ${YELLOW}$UUID${NC}"
+    echo -e "Token: ${YELLOW}$TOKEN${NC}"
+    echo -e "---------------------------"
+    echo -e "Surge 配置参考:"
+    echo -e "${GREEN}TUIC = tuic, 你的域名, $PORT, token=$TOKEN, uuid=$UUID, sni=你的域名, alpn=h3${NC}"
+}
+
+modify_config() {
+    read -p "请输入新的端口: " NEW_PORT
+    read -p "请输入新的 Token: " NEW_TOKEN
+    
+    # 使用 sed 修改 JSON 中的端口和密码 (假设结构固定)
+    sed -i "s/\"server\": \".*\"/\"server\": \"[::]:$NEW_PORT\"/" /etc/tuic/config.json
+    # 修改用户 Token
+    UUID=$(grep -oE '[a-z0-9-]{36}' /etc/tuic/config.json | head -1)
+    sed -i "s/\"$UUID\": \".*\"/\"$UUID\": \"$NEW_TOKEN\"/" /etc/tuic/config.json
+    
+    systemctl restart tuic
+    echo -e "${GREEN}配置已更新并重启。${NC}"
+}
+
 install_tuic() {
-    read -p "设置域名 (如 dc1.767667.xyz): " DOMAIN
-    read -p "设置端口 (默认 443): " PORT
+    read -p "域名: " DOMAIN
+    read -p "端口: " PORT
     PORT=${PORT:-443}
-    read -p "设置 UUID (留空随机生成): " USER_UUID
-    USER_UUID=${USER_UUID:-$(cat /proc/sys/kernel/random/uuid)}
+    UUID=${UUID:-$(cat /proc/sys/kernel/random/uuid)}
+    read -p "Token (留空随机): " TOKEN
+    [[ -z "$TOKEN" ]] && TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12)
     
-    # 密码/Token 随机逻辑
-    read -p "设置连接密码/Token (留空随机生成): " PASSWORD
-    if [ -z "$PASSWORD" ]; then
-        PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12)
-    fi
-    
-    # 1. 下载二进制文件
     arch=$(uname -m)
-    echo -e "${YELLOW}正在下载 TUIC v5 服务端...${NC}"
-    if [ "$arch" == "x86_64" ]; then
-        url="https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-x86_64-unknown-linux-gnu"
-    elif [ "$arch" == "aarch64" ]; then
-        url="https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-aarch64-unknown-linux-gnu"
-    else
-        echo -e "${RED}不支持的架构: $arch${NC}" && exit 1
-    fi
+    url="https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-x86_64-unknown-linux-gnu"
     curl -L $url -o /usr/local/bin/tuic-server && chmod +x /usr/local/bin/tuic-server
 
-    # 2. 证书路径 (默认使用 Hysteria 2 申请的路径)
-    CERT_PATH="/etc/hysteria/certs/server.crt"
-    KEY_PATH="/etc/hysteria/certs/server.key"
-    
-    if [ ! -f "$CERT_PATH" ]; then
-        echo -e "${RED}错误: 未找到域名证书! 请先通过 Hy2 脚本申请证书。${NC}"
-        exit 1
-    fi
-
-    # 3. 生成 JSON 配置文件 (移除冗余字段)
     mkdir -p /etc/tuic
     cat << EOF > /etc/tuic/config.json
 {
     "server": "[::]:$PORT",
-    "users": {
-        "$USER_UUID": "$PASSWORD"
-    },
-    "certificate": "$CERT_PATH",
-    "private_key": "$KEY_PATH",
+    "users": { "$UUID": "$TOKEN" },
+    "certificate": "/etc/hysteria/certs/server.crt",
+    "private_key": "/etc/hysteria/certs/server.key",
     "congestion_control": "bbr",
     "alpn": ["h3"],
-    "zero_rtt_handshake": true,
-    "dual_stack": true,
-    "auth_timeout": "3s",
-    "task_negotiation_timeout": "3s",
-    "max_idle_time": "10s"
+    "zero_rtt_handshake": true
 }
 EOF
-
-    # 4. 创建 Systemd 服务
     cat << EOF > /etc/systemd/system/tuic.service
 [Unit]
-Description=TUIC v5 Server Service
+Description=TUIC v5
 After=network.target
-
 [Service]
-Type=simple
-User=root
-WorkingDirectory=/etc/tuic
 ExecStart=/usr/local/bin/tuic-server -c /etc/tuic/config.json
-Restart=on-failure
-RestartSec=5s
-LimitNOFILE=512000
-
+Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
-
-    # 5. 启动服务
-    systemctl daemon-reload
-    systemctl enable tuic
-    systemctl restart tuic
-    
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}TUIC v5 安装成功!${NC}"
-    echo -e "域名: ${YELLOW}$DOMAIN${NC}"
-    echo -e "端口: ${YELLOW}$PORT${NC}"
-    echo -e "UUID: ${YELLOW}$USER_UUID${NC}"
-    echo -e "Token: ${YELLOW}$PASSWORD${NC}"
-    echo -e "----------------------------------------"
-    echo -e "Surge 配置参考 (已更新 token 字段):"
-    echo -e "${GREEN}TUIC-Node = tuic, $DOMAIN, $PORT, token=$PASSWORD, uuid=$USER_UUID, sni=$DOMAIN, skip-cert-verify=false, alpn=h3${NC}"
-    echo -e "${GREEN}========================================${NC}"
+    systemctl daemon-reload && systemctl enable --now tuic
+    echo -e "${GREEN}安装完成!${NC}"
 }
 
-# 卸载功能
-uninstall_tuic() {
-    echo -e "${YELLOW}正在卸载 TUIC v5...${NC}"
-    systemctl stop tuic
-    systemctl disable tuic
-    rm -f /usr/local/bin/tuic-server
-    rm -rf /etc/tuic
-    rm -f /etc/systemd/system/tuic.service
-    systemctl daemon-reload
-    echo -e "${GREEN}卸载完成。${NC}"
-}
-
-# 主菜单
 clear
-echo -e "${GREEN}TUIC v5 一键管理脚本 (2026 修正版)${NC}"
+echo -e "${GREEN}TUIC v5 管理脚本 (2026)${NC}"
 check_status
 echo "--------------------------------"
-echo "1. 安装 / 覆盖安装"
+echo "1. 安装"
 echo "2. 卸载"
-echo "3. 重启服务"
-echo "4. 查看实时日志"
-echo "5. 退出"
-read -p "请选择 [1-5]: " opt
+echo "3. 重启"
+echo "4. 日志"
+echo "5. 查看当前配置"
+echo "6. 修改端口和Token"
+echo "7. 退出"
+read -p "选择: " opt
 
 case $opt in
     1) install_tuic ;;
-    2) uninstall_tuic ;;
-    3) systemctl restart tuic && echo -e "${GREEN}已重启${NC}" ;;
+    2) systemctl stop tuic; rm -rf /etc/tuic /usr/local/bin/tuic-server ;;
+    3) systemctl restart tuic ;;
     4) journalctl -u tuic -f ;;
+    5) view_config ;;
+    6) modify_config ;;
     *) exit 0 ;;
 esac
