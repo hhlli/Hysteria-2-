@@ -24,14 +24,14 @@ check_status() {
 
 # 安装功能
 install_tuic() {
-    read -p "设置域名 : " DOMAIN
+    read -p "设置域名 (如 dc1.767667.xyz): " DOMAIN
     read -p "设置端口 (默认 443): " PORT
     PORT=${PORT:-443}
     read -p "设置 UUID (留空随机生成): " USER_UUID
     USER_UUID=${USER_UUID:-$(cat /proc/sys/kernel/random/uuid)}
     
-    # 密码随机逻辑：如果为空，则生成 12 位随机字符串
-    read -p "设置连接密码 (留空随机生成): " PASSWORD
+    # 密码/Token 随机逻辑
+    read -p "设置连接密码/Token (留空随机生成): " PASSWORD
     if [ -z "$PASSWORD" ]; then
         PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12)
     fi
@@ -48,16 +48,16 @@ install_tuic() {
     fi
     curl -L $url -o /usr/local/bin/tuic-server && chmod +x /usr/local/bin/tuic-server
 
-    # 2. 证书复用检查
+    # 2. 证书路径 (默认使用 Hysteria 2 申请的路径)
     CERT_PATH="/etc/hysteria/certs/server.crt"
     KEY_PATH="/etc/hysteria/certs/server.key"
     
     if [ ! -f "$CERT_PATH" ]; then
-        echo -e "${RED}错误: 未找到域名证书! 请先运行 Hy2 脚本完成证书申请。${NC}"
+        echo -e "${RED}错误: 未找到域名证书! 请先通过 Hy2 脚本申请证书。${NC}"
         exit 1
     fi
 
-    # 3. 生成 JSON 配置文件 (已移除无效的 udp_relay_mode 字段)
+    # 3. 生成 JSON 配置文件 (移除冗余字段)
     mkdir -p /etc/tuic
     cat << EOF > /etc/tuic/config.json
 {
@@ -102,14 +102,14 @@ EOF
     systemctl restart tuic
     
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}TUIC v5 安装并配置完成!${NC}"
+    echo -e "${GREEN}TUIC v5 安装成功!${NC}"
     echo -e "域名: ${YELLOW}$DOMAIN${NC}"
     echo -e "端口: ${YELLOW}$PORT${NC}"
     echo -e "UUID: ${YELLOW}$USER_UUID${NC}"
-    echo -e "密码: ${YELLOW}$PASSWORD${NC}"
+    echo -e "Token: ${YELLOW}$PASSWORD${NC}"
     echo -e "----------------------------------------"
-    echo -e "Surge 配置参考:"
-    echo -e "${GREEN}TUIC-Node = tuic, $DOMAIN, $PORT, password=$PASSWORD, uuid=$USER_UUID, sni=$DOMAIN, skip-cert-verify=false, alpn=h3${NC}"
+    echo -e "Surge 配置参考 (已更新 token 字段):"
+    echo -e "${GREEN}TUIC-Node = tuic, $DOMAIN, $PORT, token=$PASSWORD, uuid=$USER_UUID, sni=$DOMAIN, skip-cert-verify=false, alpn=h3${NC}"
     echo -e "${GREEN}========================================${NC}"
 }
 
@@ -127,7 +127,7 @@ uninstall_tuic() {
 
 # 主菜单
 clear
-echo -e "${GREEN}TUIC v5 一键管理脚本 (2026)${NC}"
+echo -e "${GREEN}TUIC v5 一键管理脚本 (2026 修正版)${NC}"
 check_status
 echo "--------------------------------"
 echo "1. 安装 / 覆盖安装"
