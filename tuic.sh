@@ -22,55 +22,6 @@ check_status() {
     fi
 }
 
-# 查看当前配置
-view_config() {
-    CONF="/etc/tuic/config.json"
-    if [ ! -f "$CONF" ]; then
-        echo -e "${RED}配置文件不存在，请先安装!${NC}"
-        return
-    fi
-    # 提取端口
-    PORT=$(grep '"server":' $CONF | awk -F: '{print $NF}' | tr -d '", ')
-    # 提取第一个符合 UUID 格式的字符串
-    UUID=$(grep -oE '[a-z0-9-]{36}' $CONF | head -1)
-    # 根据 UUID 提取对应的 Token
-    TOKEN=$(grep "\"$UUID\":" $CONF | awk -F: '{print $2}' | tr -d '", ')
-
-    echo -e "${GREEN}=== 当前 TUIC v5 配置 ===${NC}"
-    echo -e "监听端口: ${YELLOW}$PORT${NC}"
-    echo -e "UUID:     ${YELLOW}$UUID${NC}"
-    echo -e "Token:    ${YELLOW}$TOKEN${NC}"
-    echo -e "----------------------------------------"
-    echo -e "Surge 配置参考:"
-    echo -e "${GREEN}TUIC-Node = tuic, 你的域名, $PORT, token=$TOKEN, uuid=$UUID, sni=你的域名, alpn=h3${NC}"
-}
-
-# 修改端口和 Token
-modify_config() {
-    CONF="/etc/tuic/config.json"
-    if [ ! -f "$CONF" ]; then
-        echo -e "${RED}配置文件不存在，请先安装!${NC}"
-        return
-    fi
-
-    read -p "设置新端口: " NEW_PORT
-    read -p "设置新 Token (留空随机生成): " NEW_TOKEN
-    if [ -z "$NEW_TOKEN" ]; then
-        NEW_TOKEN=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12)
-    fi
-
-    # 获取当前 UUID
-    CURRENT_UUID=$(grep -oE '[a-z0-9-]{36}' $CONF | head -1)
-
-    # 替换端口和 Token
-    sed -i "s/\"server\": \".*\"/\"server\": \"[::]:$NEW_PORT\"/" $CONF
-    sed -i "s/\"$CURRENT_UUID\": \".*\"/\"$CURRENT_UUID\": \"$NEW_TOKEN\"/" $CONF
-
-    systemctl restart tuic
-    echo -e "${GREEN}配置已更新并重启服务!${NC}"
-    view_config
-}
-
 # 安装功能
 install_tuic() {
     read -p "设置域名 (如 dc1.767667.xyz): " DOMAIN
@@ -106,7 +57,7 @@ install_tuic() {
         exit 1
     fi
 
-    # 3. 生成 JSON 配置文件
+    # 3. 生成 JSON 配置文件 (移除冗余字段)
     mkdir -p /etc/tuic
     cat << EOF > /etc/tuic/config.json
 {
@@ -157,7 +108,7 @@ EOF
     echo -e "UUID: ${YELLOW}$USER_UUID${NC}"
     echo -e "Token: ${YELLOW}$PASSWORD${NC}"
     echo -e "----------------------------------------"
-    echo -e "Surge 配置参考 (已更新 token 字段):${NC}"
+    echo -e "Surge 配置参考 (已更新 token 字段):"
     echo -e "${GREEN}TUIC-Node = tuic, $DOMAIN, $PORT, token=$PASSWORD, uuid=$USER_UUID, sni=$DOMAIN, skip-cert-verify=false, alpn=h3${NC}"
     echo -e "${GREEN}========================================${NC}"
 }
@@ -183,17 +134,13 @@ echo "1. 安装 / 覆盖安装"
 echo "2. 卸载"
 echo "3. 重启服务"
 echo "4. 查看实时日志"
-echo "5. 查看当前配置"
-echo "6. 修改端口和 Token"
-echo "7. 退出"
-read -p "请选择 [1-7]: " opt
+echo "5. 退出"
+read -p "请选择 [1-5]: " opt
 
 case $opt in
     1) install_tuic ;;
     2) uninstall_tuic ;;
     3) systemctl restart tuic && echo -e "${GREEN}已重启${NC}" ;;
     4) journalctl -u tuic -f ;;
-    5) view_config ;;
-    6) modify_config ;;
     *) exit 0 ;;
 esac
