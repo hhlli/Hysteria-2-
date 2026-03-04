@@ -13,7 +13,7 @@ NC='\033[0m'
 check_status() {
     if [ -f "/usr/local/bin/anytls-server" ]; then
         if systemctl is-active --quiet anytls; then
-            echo -e "AnyTLS 状态: ${GREEN}运行中${NC}"
+            echo -e "AnyTLS 状态: ${GREEN}运行中 (Sing-box 核心)${NC}"
         else
             echo -e "AnyTLS 状态: ${YELLOW}已安装，但未运行${NC}"
         fi
@@ -30,21 +30,16 @@ view_config() {
         return
     fi
     
-    # 解析 JSON (兼容 listen 和 server 字段)
-    PORT=$(grep -E '"(server|listen)":' $CONF | awk -F: '{print $NF}' | tr -d '", ')
+    PORT=$(grep '"listen_port":' $CONF | awk -F: '{print $NF}' | tr -d '", ')
     PASSWORD=$(grep '"password":' $CONF | awk -F: '{print $2}' | tr -d '", ')
-
-    # 如果密码在 users 数组中，则提取备用密码逻辑
-    if [ -z "$PASSWORD" ]; then
-        PASSWORD=$(grep -A 1 '"users":' $CONF | tail -n 1 | awk -F: '{print $2}' | tr -d '", ')
-    fi
+    DOMAIN=$(grep '"server_name":' $CONF | awk -F: '{print $2}' | tr -d '", ')
 
     echo -e "${GREEN}=== 当前 AnyTLS 配置 ===${NC}"
     echo -e "监听端口: ${YELLOW}$PORT${NC}"
     echo -e "Password: ${YELLOW}$PASSWORD${NC}"
     echo -e "----------------------------------------"
-    echo -e "Surge 配置参考 (请关闭 skip-cert-verify):"
-    echo -e "${GREEN}AnyTLS-Node = anytls, 你的域名, $PORT, password=$PASSWORD, sni=你的域名${NC}"
+    echo -e "Surge 配置参考 (已启用真实证书校验):"
+    echo -e "${GREEN}AnyTLS-Node = anytls, $DOMAIN, $PORT, password=$PASSWORD, sni=$DOMAIN${NC}"
 }
 
 # 2. 修改端口和 Password
@@ -56,17 +51,10 @@ modify_config() {
     fi
 
     read -p "设置新端口: " NEW_PORT
-    
-    # 自动生成新的 16 位强密码
     NEW_PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
 
-    # 替换端口 (匹配 server 或 listen)
-    sed -i -E "s/\"(server|listen)\": \".*\"/\"server\": \"[::]:$NEW_PORT\"/" $CONF
-    
-    # 替换密码
+    sed -i -E "s/\"listen_port\": [0-9]+/\"listen_port\": $NEW_PORT/" $CONF
     sed -i -E "s/\"password\": \".*\"/\"password\": \"$NEW_PASSWORD\"/" $CONF
-    # 兼容 users 字段模式
-    sed -i -E "s/\"user\": \".*\"/\"user\": \"$NEW_PASSWORD\"/" $CONF
 
     systemctl restart anytls
     echo -e "${GREEN}配置已更新并重启服务。新的强密码已生效。${NC}"
@@ -79,35 +67,30 @@ install_anytls() {
     read -p "设置端口 (默认 4430): " PORT
     PORT=${PORT:-4430}
     
-    # 全自动生成 16位强密码
     echo -e "${YELLOW}正在自动生成强密码...${NC}"
     PASSWORD=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
     
-    # 下载二进制文件 (v0.0.12 最新版)
+    echo -e "${YELLOW}获取 Sing-box 最新版本核心...${NC}"
+    LATEST_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+    [[ -z "$LATEST_VERSION" ]] && LATEST_VERSION="1.11.4"
+    
     arch=$(uname -m)
-    echo -e "${YELLOW}正在下载 AnyTLS v0.0.12 服务端...${NC}"
-    
-    apt update && apt install -y curl socat unzip
-    
     if [ "$arch" == "x86_64" ]; then
-        url="https://github.com/anytls/anytls-go/releases/download/v0.0.12/anytls_0.0.12_linux_amd64.zip"
+        url="https://github.com/SagerNet/sing-box/releases/download/v${LATEST_VERSION}/sing-box-${LATEST_VERSION}-linux-amd64.tar.gz"
     elif [ "$arch" == "aarch64" ]; then
-        url="https://github.com/anytls/anytls-go/releases/download/v0.0.12/anytls_0.0.12_linux_arm64.zip"
+        url="https://github.com/SagerNet/sing-box/releases/download/v${LATEST_VERSION}/sing-box-${LATEST_VERSION}-linux-arm64.tar.gz"
     else
         echo -e "${RED}不支持的架构: $arch${NC}" && exit 1
     fi
     
-    # 下载并解压 ZIP 包
-    wget -q -O /tmp/anytls.zip $url
-    unzip -o -q /tmp/anytls.zip -d /tmp/anytls_ext
-    # 获取二进制文件并赋予权限
-    BIN_PATH=$(find /tmp/anytls_ext -type f -name "anytls*" -executable | head -n 1)
-    if [ -z "$BIN_PATH" ]; then BIN_PATH="/tmp/anytls_ext/anytls"; fi
-    mv "$BIN_PATH" /usr/local/bin/anytls-server
+    apt update && apt install -y curl tar
+    wget -q -O /tmp/sb.tar.gz $url
+    tar -xzf /tmp/sb.tar.gz -C /tmp/
+    mv /tmp/sing-box-*/sing-box /usr/local/bin/anytls-server
     chmod +x /usr/local/bin/anytls-server
-    rm -rf /tmp/anytls.zip /tmp/anytls_ext
+    rm -rf /tmp/sb.tar.gz /tmp/sing-box-*
 
-    # 证书申请与检测逻辑 (优先复用 TUIC 和 Hy2 证书)
+    # 证书申请与检测逻辑 (复用现有安全证书)
     if [ -f "/etc/hysteria/certs/server.crt" ]; then
         echo -e "${GREEN}检测到现有 Hysteria 2 证书，直接复用。${NC}"
         CERT_PATH="/etc/hysteria/certs/server.crt"
@@ -129,33 +112,54 @@ install_anytls() {
         KEY_PATH="/etc/anytls/certs/server.key"
     fi
 
-    # 生成 JSON 配置文件 (适配通用 Go 服务端格式)
+    # 生成标准的 Sing-box AnyTLS 服务端配置
     mkdir -p /etc/anytls
     cat << EOF > /etc/anytls/config.json
 {
-    "server": "[::]:$PORT",
-    "password": "$PASSWORD",
-    "users": {
-        "user": "$PASSWORD"
-    },
-    "certificate": "$CERT_PATH",
-    "private_key": "$KEY_PATH",
-    "private-key": "$KEY_PATH"
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "anytls",
+      "tag": "anytls-in",
+      "listen": "::",
+      "listen_port": $PORT,
+      "users": [
+        {
+          "name": "user",
+          "password": "$PASSWORD"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "$DOMAIN",
+        "certificate_path": "$CERT_PATH",
+        "key_path": "$KEY_PATH"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ]
 }
 EOF
-    # 注意: 上方配置同时写入了 password 和 users，以及两种私钥格式，以兼容不同版本的参数解析。
 
     # 创建 Systemd 服务
     cat << EOF > /etc/systemd/system/anytls.service
 [Unit]
-Description=AnyTLS Server Service
+Description=AnyTLS Server Service (Sing-box Core)
 After=network.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/etc/anytls
-ExecStart=/usr/local/bin/anytls-server -c /etc/anytls/config.json
+ExecStart=/usr/local/bin/anytls-server run -c /etc/anytls/config.json
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=512000
@@ -164,19 +168,13 @@ LimitNOFILE=512000
 WantedBy=multi-user.target
 EOF
 
-    # 启动服务
     systemctl daemon-reload
     systemctl enable anytls
     systemctl restart anytls
     
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}AnyTLS v0.0.12 安装成功!${NC}"
-    echo -e "域名: ${YELLOW}$DOMAIN${NC}"
-    echo -e "端口: ${YELLOW}$PORT${NC}"
-    echo -e "Password: ${YELLOW}$PASSWORD${NC}"
-    echo -e "----------------------------------------"
-    echo -e "Surge 配置参考 (可直接复制):"
-    echo -e "${GREEN}AnyTLS-Node = anytls, $DOMAIN, $PORT, password=$PASSWORD, sni=$DOMAIN${NC}"
+    echo -e "${GREEN}AnyTLS (Sing-box 核心) 安装成功!${NC}"
+    view_config
     echo -e "${GREEN}========================================${NC}"
 }
 
@@ -194,7 +192,7 @@ uninstall_anytls() {
 
 # 主菜单
 clear
-echo -e "${GREEN}AnyTLS (v0.0.12) 一键管理脚本${NC}"
+echo -e "${GREEN}AnyTLS 高级服务端 一键管理脚本 (基于 Sing-box)${NC}"
 check_status
 echo "--------------------------------"
 echo "1. 安装 / 覆盖安装"
