@@ -25,7 +25,7 @@ check_status() {
 # 安装功能
 install_hy2() {
     # 交互式获取参数
-    read -p "设置域名 (如 dc1.767667.xyz): " DOMAIN
+    read -p "设置域名 : " DOMAIN
     read -p "设置端口 (默认 443): " PORT
     PORT=${PORT:-443}
     read -p "设置连接密码: " PASSWORD
