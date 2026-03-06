@@ -58,7 +58,7 @@ install_snell_core() {
 
     clean_alien_snell "quiet"
 
-    echo -e "${YELLOW}部署 Snell v5...${NC}"
+    echo -e "${YELLOW}--- 开始部署 Snell v5 ---${NC}"
     arch=$(uname -m)
     if [ "$arch" == "x86_64" ]; then
         url="https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-amd64.zip"
@@ -68,16 +68,21 @@ install_snell_core() {
         echo -e "${RED}不支持的架构!${NC}" && exit 1
     fi
 
+    echo -e "${CYAN}[1/5] 更新系统依赖...${NC}"
     export DEBIAN_FRONTEND=noninteractive
     export NEEDRESTART_MODE=a
-    apt-get update -qq
-    apt-get install -y -qq unzip curl >/dev/null 2>&1
+    apt-get update -y
+    apt-get install -y unzip curl
     
-    wget -q -O /tmp/snell.zip $url
-    unzip -o -q /tmp/snell.zip -d /usr/local/bin/
+    echo -e "${CYAN}[2/5] 下载 Snell v5 核心...${NC}"
+    wget -O /tmp/snell.zip $url
+
+    echo -e "${CYAN}[3/5] 解压并安装...${NC}"
+    unzip -o /tmp/snell.zip -d /usr/local/bin/
     chmod +x /usr/local/bin/snell-server
     rm -f /tmp/snell.zip
 
+    echo -e "${CYAN}[4/5] 生成配置文件...${NC}"
     mkdir -p /etc/snell
     cat << EOF > /etc/snell/snell-server.conf
 [snell-server]
@@ -86,6 +91,7 @@ psk = $PSK
 ipv6 = false
 EOF
 
+    echo -e "${CYAN}[5/5] 创建并启动服务...${NC}"
     cat << EOF > /etc/systemd/system/snell.service
 [Unit]
 Description=Snell v5 Proxy Service
@@ -104,6 +110,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable --now snell
+    echo -e "${GREEN}Snell v5 部署完成。${NC}\n"
 }
 
 install_shadowtls_core() {
@@ -112,7 +119,7 @@ install_shadowtls_core() {
     local SNI=$3
     local PASS=$4
 
-    echo -e "${YELLOW}部署 ShadowTLS v3...${NC}"
+    echo -e "${YELLOW}--- 开始部署 ShadowTLS v3 ---${NC}"
     arch=$(uname -m)
     if [ "$arch" == "x86_64" ]; then
         stls_url="https://github.com/ihciah/shadow-tls/releases/latest/download/shadow-tls-x86_64-unknown-linux-musl"
@@ -120,10 +127,11 @@ install_shadowtls_core() {
         stls_url="https://github.com/ihciah/shadow-tls/releases/latest/download/shadow-tls-aarch64-unknown-linux-musl"
     fi
 
-    wget -q -O /usr/local/bin/shadowtls $stls_url
+    echo -e "${CYAN}[1/3] 下载 ShadowTLS 核心...${NC}"
+    wget -O /usr/local/bin/shadowtls $stls_url
     chmod +x /usr/local/bin/shadowtls
 
-    # 修复点：加入 server 子命令和明确的参数标志
+    echo -e "${CYAN}[2/3] 创建服务与转发规则...${NC}"
     cat << EOF > /etc/systemd/system/shadowtls.service
 [Unit]
 Description=ShadowTLS v3 Server
@@ -135,7 +143,7 @@ Environment="STLS_PORT=$EXTERNAL_PORT"
 Environment="SNELL_PORT=$INTERNAL_PORT"
 Environment="STLS_SNI=$SNI"
 Environment="STLS_PASS=$PASS"
-ExecStart=/usr/local/bin/shadowtls server --listen 0.0.0.0:\${STLS_PORT} --server 127.0.0.1:\${SNELL_PORT} --tls \${STLS_SNI}:443 --password \${STLS_PASS}
+ExecStart=/usr/local/bin/shadowtls --v3 server --listen 0.0.0.0:\${STLS_PORT} --server 127.0.0.1:\${SNELL_PORT} --tls \${STLS_SNI}:443 --password \${STLS_PASS}
 Restart=on-failure
 RestartSec=5s
 
@@ -143,8 +151,10 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
 
+    echo -e "${CYAN}[3/3] 启动服务...${NC}"
     systemctl daemon-reload
     systemctl enable --now shadowtls
+    echo -e "${GREEN}ShadowTLS v3 部署完成。${NC}\n"
 }
 
 menu_install_snell() {
@@ -153,7 +163,6 @@ menu_install_snell() {
     PSK=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)
     
     install_snell_core "0.0.0.0" "$PORT" "$PSK"
-    echo -e "${GREEN}安装完成。${NC}"
     menu_view_config
 }
 
@@ -170,7 +179,6 @@ menu_install_combo() {
     install_snell_core "127.0.0.1" "$SNELL_PORT" "$SNELL_PSK"
     install_shadowtls_core "$STLS_PORT" "$SNELL_PORT" "$STLS_SNI" "$STLS_PASS"
 
-    echo -e "${GREEN}安装完成。${NC}"
     sleep 1
     menu_view_config
 }
@@ -188,7 +196,6 @@ menu_view_config() {
     echo -e "${GREEN}=== 当前配置详情 ===${NC}"
     
     if [ -f "/etc/systemd/system/shadowtls.service" ]; then
-        # 稳定的配置提取逻辑
         STLS_PORT=$(grep 'Environment="STLS_PORT=' /etc/systemd/system/shadowtls.service | cut -d= -f2- | tr -d '"')
         STLS_SNI=$(grep 'Environment="STLS_SNI=' /etc/systemd/system/shadowtls.service | cut -d= -f2- | tr -d '"')
         STLS_PASS=$(grep 'Environment="STLS_PASS=' /etc/systemd/system/shadowtls.service | cut -d= -f2- | tr -d '"')
