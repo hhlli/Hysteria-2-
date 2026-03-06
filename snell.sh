@@ -3,106 +3,69 @@
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 权限运行此脚本!${NC}" && exit 1
 
-# --- 全局嗅探与状态检查 ---
-check_status() {
-    # 1. 检查本脚本的标准服务
-    if systemctl is-active --quiet snell; then
-        echo -e "本脚本 Snell v5: ${GREEN}运行中${NC}"
-    else
-        echo -e "本脚本 Snell v5: ${RED}未运行或未安装${NC}"
-        
-        # 2. 嗅探其他脚本安装的 Snell
-        ALIEN_PID=$(pgrep -i snell | grep -v "$$" | head -n 1) # 排除当前脚本进程
-        if [ -n "$ALIEN_PID" ]; then
-            ALIEN_EXE=$(readlink -f /proc/$ALIEN_PID/exe 2>/dev/null)
-            echo -e "${YELLOW}警告: 检测到其他脚本安装的 Snell 正在运行!${NC}"
-            echo -e " -> 进程 ID: $ALIEN_PID"
-            echo -e " -> 执行路径: $ALIEN_EXE"
-            echo -e " -> 建议: 重新执行本脚本的 [安装] 功能，脚本将自动清理并接管旧版本。${NC}"
-        fi
-    fi
+# ================= 核心检测与清理模块 =================
 
-    # 3. 检查 ShadowTLS
-    if systemctl is-active --quiet shadowtls; then
-        echo -e "ShadowTLS v3: ${GREEN}运行中${NC}"
-    else
-        echo -e "ShadowTLS v3: ${YELLOW}未安装或停止${NC}"
-    fi
-}
-
-# --- 强力清理旧版/异形 Snell ---
+# 扫描并清理非本脚本部署的 "野生" Snell
 clean_alien_snell() {
-    echo -e "${YELLOW}正在扫描并清理系统中其他的 Snell 残留...${NC}"
+    local quiet=$1
+    [[ -z "$quiet" ]] && echo -e "${YELLOW}正在扫描并清理系统中的所有旧版/异形 Snell 残留...${NC}"
     
-    # 查找所有带 snell 名字的服务并停用 (排除本脚本的标准 snell.service)
     ALIEN_SERVICES=$(systemctl list-unit-files | grep -i snell | grep -v "shadowtls" | awk '{print $1}')
     for svc in $ALIEN_SERVICES; do
         if [ "$svc" != "snell.service" ]; then
-            echo -e "发现非标准服务: $svc，正在停止并禁用..."
             systemctl stop "$svc" 2>/dev/null
             systemctl disable "$svc" 2>/dev/null
             rm -f "/etc/systemd/system/$svc" "/lib/systemd/system/$svc"
         fi
     done
 
-    # 强制结束所有 snell 进程
     pkill -9 -i snell 2>/dev/null
-    
-    # 清理常见的旧版路径
     rm -f /usr/local/bin/snell-server /usr/bin/snell-server /usr/local/bin/snell
     rm -rf /etc/snell-server /etc/snell
-
     systemctl daemon-reload
-    echo -e "${GREEN}旧版本清理完毕。${NC}"
 }
 
-
-# --- 配置读取模块 ---
-view_config() {
-    if [ ! -f "/etc/snell/snell-server.conf" ]; then
-        echo -e "${RED}未找到本脚本的标准 Snell 配置!${NC}"
-        return
+# 菜单头部的状态概览
+check_status() {
+    echo -e "${CYAN}--- 全盘状态检测 ---${NC}"
+    
+    # 1. 检查野生 Snell 进程
+    ALIEN_PID=$(pgrep -i snell | grep -v "$$" | head -n 1)
+    if [ -n "$ALIEN_PID" ]; then
+        ALIEN_EXE=$(readlink -f /proc/$ALIEN_PID/exe 2>/dev/null)
+        echo -e "${YELLOW}警告: 检测到未知版本/路径的 Snell 正在运行!${NC}"
+        echo -e "      (PID: $ALIEN_PID, 路径: $ALIEN_EXE)"
+        echo -e "      建议先使用选项 7 卸载清理，再重新安装。\n"
     fi
 
-    SNELL_LISTEN=$(grep "listen =" /etc/snell/snell-server.conf | tr -d ' ' | awk -F= '{print $2}')
-    SNELL_PORT=$(echo "$SNELL_LISTEN" | awk -F: '{print $NF}')
-    SNELL_PSK=$(grep "psk =" /etc/snell/snell-server.conf | awk -F= '{print $2}' | tr -d ' ')
-
-    echo -e "${GREEN}=== 当前 Snell v5 配置 ===${NC}"
-    echo -e "监听地址: ${YELLOW}$SNELL_LISTEN${NC}"
-    echo -e "PSK 密码: ${YELLOW}$SNELL_PSK${NC}"
-    echo -e "----------------------------------------"
-
-    if [ -f "/etc/systemd/system/shadowtls.service" ] && systemctl is-active --quiet shadowtls; then
-        EXEC_LINE=$(grep "ExecStart" /etc/systemd/system/shadowtls.service)
-        STLS_PORT=$(echo "$EXEC_LINE" | awk '{print $4}' | awk -F: '{print $2}')
-        STLS_SNI=$(echo "$EXEC_LINE" | awk '{print $6}' | awk -F: '{print $1}')
-        STLS_PASS=$(echo "$EXEC_LINE" | awk '{print $7}')
-
-        echo -e "${GREEN}=== 当前 ShadowTLS v3 配置 ===${NC}"
-        echo -e "外部端口: ${YELLOW}$STLS_PORT${NC}"
-        echo -e "伪装 SNI: ${YELLOW}$STLS_SNI${NC}"
-        echo -e "STLS密码: ${YELLOW}$STLS_PASS${NC}"
-        echo -e "----------------------------------------"
-        echo -e "Surge 配置参考 (组合模式):"
-        echo -e "${GREEN}Snell-STLS = snell, 你的服务器IP, $STLS_PORT, psk=$SNELL_PSK, version=5, shadow-tls-password=$STLS_PASS, shadow-tls-sni=$STLS_SNI, shadow-tls-version=3${NC}"
+    # 2. 检查本脚本的标准服务
+    if systemctl is-active --quiet snell; then
+        echo -e "Snell v5 服务:     ${GREEN}运行中${NC}"
     else
-        echo -e "Surge 配置参考 (直连模式):"
-        echo -e "${GREEN}Snell-Direct = snell, 你的服务器IP, $SNELL_PORT, psk=$SNELL_PSK, version=5${NC}"
+        echo -e "Snell v5 服务:     ${RED}未安装或停止${NC}"
     fi
+
+    if systemctl is-active --quiet shadowtls; then
+        echo -e "ShadowTLS v3 服务: ${GREEN}运行中${NC}"
+    else
+        echo -e "ShadowTLS v3 服务: ${YELLOW}未安装或停止${NC}"
+    fi
+    echo -e "${CYAN}--------------------${NC}\n"
 }
 
-# --- 核心安装模块 ---
+# ================= 安装模块 =================
+
 install_snell_core() {
     local LISTEN_IP=$1
     local PORT=$2
     local PSK=$3
 
-    clean_alien_snell # 安装前先强力清理系统中的旧版本或异形版本
+    clean_alien_snell "quiet"
 
     echo -e "${YELLOW}部署 Snell v5 核心...${NC}"
     arch=$(uname -m)
@@ -114,7 +77,7 @@ install_snell_core() {
         echo -e "${RED}不支持的架构!${NC}" && exit 1
     fi
 
-    apt update && apt install -y unzip curl
+    apt update -q && apt install -y -q unzip curl
     wget -q -O /tmp/snell.zip $url
     unzip -o -q /tmp/snell.zip -d /usr/local/bin/
     chmod +x /usr/local/bin/snell-server
@@ -184,21 +147,24 @@ EOF
     systemctl enable --now shadowtls
 }
 
-# --- 交互安装逻辑 ---
-do_install_snell_only() {
+# ================= 菜单功能模块 =================
+
+# 1. 安装 Snell v5 (直连)
+menu_install_snell() {
     read -p "设置 Snell 公网监听端口 (默认 10086): " PORT
     PORT=${PORT:-10086}
     PSK=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)
     
     install_snell_core "0.0.0.0" "$PORT" "$PSK"
     echo -e "${GREEN}Snell 独立安装完成!${NC}"
-    view_config
+    menu_view_config
 }
 
-do_install_combo() {
-    read -p "设置 ShadowTLS 对外端口 (默认 443): " STLS_PORT
+# 2. 安装 Snell + ShadowTLS
+menu_install_combo() {
+    read -p "设置 ShadowTLS 对外公网端口 (默认 443): " STLS_PORT
     STLS_PORT=${STLS_PORT:-443}
-    read -p "设置伪装 SNI (默认 gateway.icloud.com): " STLS_SNI
+    read -p "设置伪装 SNI 域名 (默认 gateway.icloud.com): " STLS_SNI
     STLS_SNI=${STLS_SNI:-gateway.icloud.com}
 
     SNELL_PORT=$(shuf -i 10000-65000 -n 1)
@@ -209,63 +175,152 @@ do_install_combo() {
     install_shadowtls_core "$STLS_PORT" "$SNELL_PORT" "$STLS_SNI" "$STLS_PASS"
 
     echo -e "${GREEN}Snell + ShadowTLS 组合安装完成!${NC}"
-    view_config
+    menu_view_config
 }
 
-# --- 卸载逻辑 ---
-uninstall_shadowtls_only() {
-    if [ ! -f "/etc/systemd/system/shadowtls.service" ]; then
-        echo -e "${YELLOW}ShadowTLS 未安装。${NC}"
+# 3. 查看配置
+menu_view_config() {
+    if [ ! -f "/etc/snell/snell-server.conf" ]; then
+        echo -e "${RED}未找到 Snell 配置文件，请先安装!${NC}"
         return
     fi
 
-    echo -e "${YELLOW}正在移除 ShadowTLS...${NC}"
-    systemctl stop shadowtls 2>/dev/null
-    systemctl disable shadowtls 2>/dev/null
-    rm -f /usr/local/bin/shadowtls /etc/systemd/system/shadowtls.service
+    SNELL_LISTEN=$(grep "listen =" /etc/snell/snell-server.conf | tr -d ' ' | awk -F= '{print $2}')
+    SNELL_PORT=$(echo "$SNELL_LISTEN" | awk -F: '{print $NF}')
+    SNELL_PSK=$(grep "psk =" /etc/snell/snell-server.conf | awk -F= '{print $2}' | tr -d ' ')
 
-    # 恢复 Snell 的公网监听
-    if [ -f "/etc/snell/snell-server.conf" ]; then
-        echo -e "${YELLOW}正在恢复 Snell 直连配置...${NC}"
-        SNELL_PORT=$(grep "listen =" /etc/snell/snell-server.conf | awk -F: '{print $NF}')
-        sed -i "s/listen = 127.0.0.1:.*/listen = 0.0.0.0:$SNELL_PORT/" /etc/snell/snell-server.conf
-        systemctl daemon-reload
-        systemctl restart snell
-        echo -e "${GREEN}Snell 已恢复公网监听 (端口: $SNELL_PORT)${NC}"
+    echo -e "${GREEN}=== 当前配置详情 ===${NC}"
+    
+    if [ -f "/etc/systemd/system/shadowtls.service" ] && systemctl is-active --quiet shadowtls; then
+        EXEC_LINE=$(grep "ExecStart" /etc/systemd/system/shadowtls.service)
+        STLS_PORT=$(echo "$EXEC_LINE" | awk '{print $4}' | awk -F: '{print $2}')
+        STLS_SNI=$(echo "$EXEC_LINE" | awk '{print $6}' | awk -F: '{print $1}')
+        STLS_PASS=$(echo "$EXEC_LINE" | awk '{print $7}')
+
+        echo -e "模式: ${YELLOW}组合 (ShadowTLS接管公网)${NC}"
+        echo -e "对外端口: ${YELLOW}$STLS_PORT${NC}"
+        echo -e "伪装 SNI: ${YELLOW}$STLS_SNI${NC}"
+        echo -e "STLS密码: ${YELLOW}$STLS_PASS${NC}"
+        echo -e "Snell 密码: ${YELLOW}$SNELL_PSK${NC}"
+        echo -e "----------------------------------------"
+        echo -e "Surge 配置参考:"
+        echo -e "${GREEN}Snell-STLS = snell, 你的IP, $STLS_PORT, psk=$SNELL_PSK, version=5, shadow-tls-password=$STLS_PASS, shadow-tls-sni=$STLS_SNI, shadow-tls-version=3${NC}"
+    else
+        echo -e "模式: ${YELLOW}直连 (仅 Snell)${NC}"
+        echo -e "监听端口: ${YELLOW}$SNELL_PORT${NC}"
+        echo -e "Snell 密码: ${YELLOW}$SNELL_PSK${NC}"
+        echo -e "----------------------------------------"
+        echo -e "Surge 配置参考:"
+        echo -e "${GREEN}Snell-Direct = snell, 你的IP, $SNELL_PORT, psk=$SNELL_PSK, version=5${NC}"
     fi
-    echo -e "${GREEN}ShadowTLS 已卸载。${NC}"
 }
 
-uninstall_all() {
-    echo -e "${YELLOW}正在完全清理系统中的所有 Snell 与 ShadowTLS 组件...${NC}"
-    clean_alien_snell # 调用强力清理函数
-    systemctl stop shadowtls 2>/dev/null
-    systemctl disable shadowtls 2>/dev/null
-    rm -f /usr/local/bin/shadowtls /etc/systemd/system/shadowtls.service
-    systemctl daemon-reload
-    echo -e "${GREEN}完全卸载成功!${NC}"
+# 4. 修改配置
+menu_modify_config() {
+    if [ ! -f "/etc/snell/snell-server.conf" ]; then
+        echo -e "${RED}配置文件不存在，请先安装!${NC}"
+        return
+    fi
+
+    # 简单判定当前模式
+    if [ -f "/etc/systemd/system/shadowtls.service" ]; then
+        echo -e "${CYAN}当前为 Snell + ShadowTLS 模式${NC}"
+        read -p "设置新的公网对外端口: " NEW_PORT
+        NEW_STLS_PASS=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
+        NEW_SNELL_PSK=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)
+
+        # 修改 Snell PSK
+        sed -i "s/psk = .*/psk = $NEW_SNELL_PSK/" /etc/snell/snell-server.conf
+        
+        # 修改 ShadowTLS 端口和密码
+        sed -i -E "s/0\.0\.0\.0:[0-9]+/0.0.0.0:$NEW_PORT/" /etc/systemd/system/shadowtls.service
+        sed -i -E "s/ [A-Za-z0-9]{16}$/ $NEW_STLS_PASS/" /etc/systemd/system/shadowtls.service
+        
+        systemctl daemon-reload
+        systemctl restart snell shadowtls
+        echo -e "${GREEN}配置已更新并重启服务 (已生成新密码)。${NC}"
+    else
+        echo -e "${CYAN}当前为仅 Snell 直连模式${NC}"
+        read -p "设置新的公网端口: " NEW_PORT
+        NEW_SNELL_PSK=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)
+        
+        sed -i -E "s/listen = 0\.0\.0\.0:[0-9]+/listen = 0.0.0.0:$NEW_PORT/" /etc/snell/snell-server.conf
+        sed -i "s/psk = .*/psk = $NEW_SNELL_PSK/" /etc/snell/snell-server.conf
+        
+        systemctl restart snell
+        echo -e "${GREEN}配置已更新并重启服务 (已生成新密码)。${NC}"
+    fi
+    menu_view_config
 }
 
-# --- 主菜单 ---
+# 5. 查看运行状态 (实时日志)
+menu_view_logs() {
+    echo -e "${YELLOW}显示服务日志 (按 Ctrl+C 退出):${NC}"
+    if systemctl is-active --quiet shadowtls; then
+        journalctl -u snell -u shadowtls -f
+    else
+        journalctl -u snell -f
+    fi
+}
+
+# 6. 检查更新
+menu_check_update() {
+    echo -e "${YELLOW}正在检测 Snell 服务端更新...${NC}"
+    if [ ! -f "/usr/local/bin/snell-server" ]; then
+        echo -e "${RED}尚未安装 Snell。${NC}"
+        return
+    fi
+    
+    # 提取本地版本
+    LOCAL_VER=$(/usr/local/bin/snell-server --version 2>&1 | head -n 1 | awk '{print $2}')
+    echo -e "当前本地版本: ${CYAN}$LOCAL_VER${NC}"
+    echo -e "Snell 暂无官方 API 查询最新版本，当前脚本默认下载的最新版为: ${CYAN}v5.0.1${NC}"
+    
+    if [[ "$LOCAL_VER" != *"v5"* ]]; then
+        echo -e "${YELLOW}发现您使用的不是 v5 系列，建议通过选项 1 或 2 覆盖安装。${NC}"
+    else
+        echo -e "${GREEN}您的内核已是 v5 系列。${NC}"
+    fi
+}
+
+# 7. 完全卸载
+menu_uninstall() {
+    echo -e "${YELLOW}警告: 即将卸载系统中所有的 Snell 和 ShadowTLS 组件。${NC}"
+    read -p "确认卸载? (y/N): " CONFIRM
+    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+        clean_alien_snell "quiet"
+        systemctl stop shadowtls 2>/dev/null
+        systemctl disable shadowtls 2>/dev/null
+        rm -f /usr/local/bin/shadowtls /etc/systemd/system/shadowtls.service
+        systemctl daemon-reload
+        echo -e "${GREEN}完全卸载完毕。系统已清理。${NC}"
+    else
+        echo -e "已取消。"
+    fi
+}
+
+# ================= 主控制流 =================
 clear
-echo -e "${GREEN}Snell v5 & ShadowTLS v3 智能管理脚本 (带全局嗅探)${NC}"
 check_status
-echo "--------------------------------"
-echo "1. 仅安装 Snell v5 (直连模式)"
-echo "2. 安装 Snell + ShadowTLS (组合模式)"
-echo "3. 仅卸载 ShadowTLS (恢复 Snell 直连)"
-echo "4. 完全卸载 (清理所有相关文件与服务)"
-echo "5. 重启服务"
-echo "6. 查看当前配置"
-echo "7. 退出"
-read -p "选择 [1-7]: " opt
+
+echo "1. 安装 Snell v5"
+echo "2. 安装 Snell v5 + ShadowTLS v3"
+echo "3. 查看配置"
+echo "4. 修改配置"
+echo "5. 查看运行状态"
+echo "6. 检查更新"
+echo "7. 卸载 (清理所有组件)"
+echo "8. 退出"
+read -p "选择 [1-8]: " opt
 
 case $opt in
-    1) do_install_snell_only ;;
-    2) do_install_combo ;;
-    3) uninstall_shadowtls_only ;;
-    4) uninstall_all ;;
-    5) systemctl restart snell shadowtls 2>/dev/null && echo -e "${GREEN}已发送重启指令${NC}" ;;
-    6) view_config ;;
-    *) exit 0 ;;
+    1) menu_install_snell ;;
+    2) menu_install_combo ;;
+    3) menu_view_config ;;
+    4) menu_modify_config ;;
+    5) menu_view_logs ;;
+    6) menu_check_update ;;
+    7) menu_uninstall ;;
+    8) exit 0 ;;
+    *) echo -e "${RED}无效选择。${NC}" && exit 1 ;;
 esac
