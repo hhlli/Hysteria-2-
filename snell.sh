@@ -8,9 +8,6 @@ NC='\033[0m'
 
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 权限运行此脚本!${NC}" && exit 1
 
-# ================= 核心检测与清理模块 =================
-
-# 扫描并清理非本脚本部署的 "野生" Snell
 clean_alien_snell() {
     local quiet=$1
     [[ -z "$quiet" ]] && echo -e "${YELLOW}正在扫描并清理系统中的所有旧版/异形 Snell 残留...${NC}"
@@ -24,7 +21,6 @@ clean_alien_snell() {
         fi
     done
 
-    # 修正点：精准匹配 snell-server 二进制文件名称，避免误杀执行脚本的 snell.sh 进程
     pkill -9 -x "snell-server" 2>/dev/null
     
     rm -f /usr/local/bin/snell-server /usr/bin/snell-server /usr/local/bin/snell
@@ -32,11 +28,9 @@ clean_alien_snell() {
     systemctl daemon-reload
 }
 
-# 菜单头部的状态概览
 check_status() {
     echo -e "${CYAN}--- 全盘状态检测 ---${NC}"
     
-    # 精准查找 snell-server 进程，排除 grep 自身和脚本自身
     ALIEN_PID=$(pgrep -x "snell-server" | head -n 1)
     if [ -n "$ALIEN_PID" ]; then
         ALIEN_EXE=$(readlink -f /proc/$ALIEN_PID/exe 2>/dev/null)
@@ -45,7 +39,6 @@ check_status() {
         echo -e "      建议先使用选项 7 卸载清理，再重新安装。\n"
     fi
 
-    # 检查本脚本的标准服务
     if systemctl is-active --quiet snell; then
         echo -e "Snell v5 服务:     ${GREEN}运行中${NC}"
     else
@@ -59,8 +52,6 @@ check_status() {
     fi
     echo -e "${CYAN}--------------------${NC}\n"
 }
-
-# ================= 安装模块 =================
 
 install_snell_core() {
     local LISTEN_IP=$1
@@ -79,7 +70,11 @@ install_snell_core() {
         echo -e "${RED}不支持的架构!${NC}" && exit 1
     fi
 
-    apt update -q && apt install -y -q unzip curl
+    # 修改为非交互模式，防止中断 SSH
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq unzip curl >/dev/null 2>&1
+    
     wget -q -O /tmp/snell.zip $url
     unzip -o -q /tmp/snell.zip -d /usr/local/bin/
     chmod +x /usr/local/bin/snell-server
@@ -148,8 +143,6 @@ EOF
     systemctl daemon-reload
     systemctl enable --now shadowtls
 }
-
-# ================= 菜单功能模块 =================
 
 menu_install_snell() {
     read -p "设置 Snell 公网监听端口 (默认 10086): " PORT
@@ -289,7 +282,6 @@ menu_uninstall() {
     fi
 }
 
-# ================= 主控制流 =================
 clear
 check_status
 
