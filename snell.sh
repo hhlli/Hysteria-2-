@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -9,17 +8,8 @@ NC='\033[0m'
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 权限运行此脚本!${NC}" && exit 1
 
 check_status() {
-    if systemctl is-active --quiet snell; then
-        echo -e "Snell v5 状态: ${GREEN}运行中${NC}"
-    else
-        echo -e "Snell v5 状态: ${RED}未安装或停止${NC}"
-    fi
-
-    if systemctl is-active --quiet shadowtls; then
-        echo -e "ShadowTLS v3 状态: ${GREEN}运行中${NC}"
-    else
-        echo -e "ShadowTLS v3 状态: ${YELLOW}未安装或停止${NC}"
-    fi
+    systemctl is-active --quiet snell && echo -e "Snell v5 状态: ${GREEN}运行中${NC}" || echo -e "Snell v5 状态: ${RED}未安装或停止${NC}"
+    systemctl is-active --quiet shadowtls && echo -e "ShadowTLS v3 状态: ${GREEN}运行中${NC}" || echo -e "ShadowTLS v3 状态: ${YELLOW}未安装或停止${NC}"
 }
 
 view_config() {
@@ -28,7 +18,6 @@ view_config() {
         return
     fi
 
-    # 读取 Snell 配置
     SNELL_PORT=$(grep "listen =" /etc/snell/snell-server.conf | tr -d ' ' | awk -F: '{print $NF}')
     SNELL_PSK=$(grep "psk =" /etc/snell/snell-server.conf | awk -F= '{print $2}' | tr -d ' ')
     IPV6_STATUS=$(grep "ipv6 =" /etc/snell/snell-server.conf | awk -F= '{print $2}' | tr -d ' ')
@@ -39,11 +28,12 @@ view_config() {
     echo -e "IPv6 支持:    ${YELLOW}$IPV6_STATUS${NC}"
     echo -e "----------------------------------------"
 
-    # 如果安装了 ShadowTLS，读取其配置
     if [ -f "/etc/systemd/system/shadowtls.service" ]; then
-        STLS_PORT=$(grep "ExecStart" /etc/systemd/system/shadowtls.service | awk -F'--listen 0.0.0.0:' '{print $2}' | awk '{print $1}')
-        STLS_PASS=$(grep "ExecStart" /etc/systemd/system/shadowtls.service | awk -F'--password ' '{print $2}' | awk '{print $1}')
-        STLS_SNI=$(grep "ExecStart" /etc/systemd/system/shadowtls.service | grep -oP '(?<=--tls )[^\s]+')
+        # 从位置参数中提取配置
+        EXEC_LINE=$(grep "ExecStart" /etc/systemd/system/shadowtls.service)
+        STLS_PORT=$(echo "$EXEC_LINE" | awk '{print $4}' | awk -F: '{print $2}')
+        STLS_SNI=$(echo "$EXEC_LINE" | awk '{print $6}' | awk -F: '{print $1}')
+        STLS_PASS=$(echo "$EXEC_LINE" | awk '{print $7}')
 
         echo -e "${GREEN}=== 当前 ShadowTLS v3 配置 ===${NC}"
         echo -e "外部暴露端口: ${YELLOW}$STLS_PORT${NC}"
@@ -62,14 +52,10 @@ install_snell_shadowtls() {
     read -p "设置 ShadowTLS 外部暴露端口 (默认 443): " STLS_PORT
     STLS_PORT=${STLS_PORT:-443}
     
-    # 随机生成一个内部 Snell 端口 (10000-65000)
     SNELL_PORT=$(shuf -i 10000-65000 -n 1)
-    
-    # 生成强密码
     SNELL_PSK=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)
     STLS_PASS=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
 
-    # 推荐的伪装域名，最好是支持 TLS 1.3 且在国内可直连的域名
     read -p "设置 ShadowTLS 伪装域名 SNI (默认 gateway.icloud.com): " STLS_SNI
     STLS_SNI=${STLS_SNI:-gateway.icloud.com}
 
@@ -123,7 +109,7 @@ EOF
     wget -q -O /usr/local/bin/shadowtls $stls_url
     chmod +x /usr/local/bin/shadowtls
 
-    # ShadowTLS v3 启动命令：监听外部端口，TLS 转发到真实网站，解密流量转发到本地 Snell
+    # 修正：采用位置参数格式启动 ShadowTLS v3
     cat << EOF > /etc/systemd/system/shadowtls.service
 [Unit]
 Description=ShadowTLS v3 Server
@@ -131,7 +117,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/shadowtls --v3 --server 127.0.0.1:$SNELL_PORT --listen 0.0.0.0:$STLS_PORT --tls $STLS_SNI:443 --password $STLS_PASS
+ExecStart=/usr/local/bin/shadowtls --v3 0.0.0.0:$STLS_PORT 127.0.0.1:$SNELL_PORT $STLS_SNI:443 $STLS_PASS
 Restart=on-failure
 RestartSec=5s
 
@@ -162,7 +148,7 @@ clear
 echo -e "${GREEN}Snell v5 + ShadowTLS v3 一键管理脚本 (2026)${NC}"
 check_status
 echo "--------------------------------"
-echo "1. 安装 / 覆盖安装 (包含 ShadowTLS)"
+echo "1. 安装 / 覆盖安装"
 echo "2. 卸载全部"
 echo "3. 重启服务"
 echo "4. 查看当前配置"
