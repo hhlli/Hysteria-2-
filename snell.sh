@@ -15,8 +15,8 @@ clean_alien_snell() {
     ALIEN_SERVICES=$(systemctl list-unit-files | grep -i snell | grep -v "shadowtls" | awk '{print $1}')
     for svc in $ALIEN_SERVICES; do
         if [ "$svc" != "snell.service" ]; then
-            systemctl stop "$svc" 2>/dev/null
-            systemctl disable "$svc" 2>/dev/null
+            systemctl stop "$svc"
+            systemctl disable "$svc"
             rm -f "/etc/systemd/system/$svc" "/lib/systemd/system/$svc"
         fi
     done
@@ -79,10 +79,10 @@ install_snell_core() {
     apt-get install -y unzip curl
     
     echo -e "${CYAN}[2/5] 下载 Snell v5 核心...${NC}"
-    wget -q -O /tmp/snell.zip $url
+    wget -O /tmp/snell.zip $url
 
     echo -e "${CYAN}[3/5] 解压并安装...${NC}"
-    unzip -o -q /tmp/snell.zip -d /usr/local/bin/
+    unzip -o /tmp/snell.zip -d /usr/local/bin/
     chmod +x /usr/local/bin/snell-server
     rm -f /tmp/snell.zip
 
