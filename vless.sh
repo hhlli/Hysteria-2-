@@ -64,6 +64,7 @@ install_xray_core() {
     echo -e "${CYAN}[4/5] 生成 REALITY 密钥与配置文件...${NC}"
     UUID=$(/usr/local/bin/xray uuid)
     
+    # 捕获输出并进行双格式兼容提取
     /usr/local/bin/xray x25519 > /tmp/xray_keys.txt 2>&1
     PRIVATE_KEY=$(grep -iE "Private" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r\n')
     PUBLIC_KEY=$(grep -iE "Public|Password" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r\n')
@@ -191,7 +192,8 @@ menu_view_config() {
     echo -e "Flow: xtls-rprx-vision"
     echo -e "----------------------------------------"
     echo -e "Loon 配置参考:"
-    echo -e "${GREEN}VLESS-Reality = vless, $VPS_IP, $PORT, $UUID, tls=reality, tls-name=$SNI, client-fingerprint=chrome, reality-public-key=$PUBLIC_KEY, reality-short-id=$SHORT_ID, flow=xtls-rprx-vision${NC}"
+    # 已根据 Loon 官方 VLESS Reality 语法修正
+    echo -e "${GREEN}VLESS-Reality = vless, $VPS_IP, $PORT, \"$UUID\", transport=tcp, over-tls=true, sni=$SNI, public-key=\"$PUBLIC_KEY\", short-id=$SHORT_ID, flow=xtls-rprx-vision, client-fingerprint=chrome${NC}"
 }
 
 menu_modify_config() {
@@ -216,11 +218,6 @@ menu_modify_config() {
     systemctl restart xray
     echo -e "${GREEN}配置已更新并重启服务。${NC}"
     menu_view_config
-}
-
-menu_view_logs() {
-    echo -e "显示服务日志 (按 Ctrl+C 退出):"
-    journalctl -u xray -f
 }
 
 menu_check_update() {
@@ -250,25 +247,35 @@ menu_uninstall() {
     fi
 }
 
-clear
-check_status
+# 循环主菜单逻辑
+while true; do
+    clear
+    check_status
+    echo "1. 安装 VLESS+REALITY"
+    echo "2. 查看配置"
+    echo "3. 修改配置 (端口/SNI)"
+    echo "4. 查看运行状态 (实时日志)"
+    echo "5. 检查更新"
+    echo "6. 卸载"
+    echo "7. 退出"
+    read -p "选择 [1-7]: " opt
 
-echo "1. 安装 VLESS+REALITY"
-echo "2. 查看配置"
-echo "3. 修改配置 (端口/SNI)"
-echo "4. 查看运行状态"
-echo "5. 检查更新"
-echo "6. 卸载"
-echo "7. 退出"
-read -p "选择 [1-7]: " opt
-
-case $opt in
-    1) menu_install ;;
-    2) menu_view_config ;;
-    3) menu_modify_config ;;
-    4) menu_view_logs ;;
-    5) menu_check_update ;;
-    6) menu_uninstall ;;
-    7) exit 0 ;;
-    *) exit 1 ;;
-esac
+    echo -e "\n"
+    case $opt in
+        1) menu_install ;;
+        2) menu_view_config ;;
+        3) menu_modify_config ;;
+        4) 
+           echo -e "${YELLOW}已打开日志分页查看模式，按 'q' 即可退出并返回菜单。${NC}"
+           # 使用 -e 让 journalctl 打开默认 pager (less)，按 q 回退，防止直接 Ctrl+C 杀掉脚本
+           journalctl -u xray -e
+           ;;
+        5) menu_check_update ;;
+        6) menu_uninstall ;;
+        7) echo -e "${CYAN}已退出脚本。${NC}"; exit 0 ;;
+        *) echo -e "${RED}无效选择。${NC}" ;;
+    esac
+    
+    echo -e "\n"
+    read -n 1 -s -r -p "按任意键返回主菜单..."
+done
