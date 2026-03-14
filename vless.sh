@@ -10,10 +10,14 @@ NC='\033[0m'
 
 check_status() {
     echo -e "${CYAN}--- 服务状态检测 ---${NC}"
-    if systemctl is-active --quiet xray; then
-        echo -e "Xray (VLESS) 服务: ${GREEN}运行中${NC}"
+    if [ -f "/usr/local/bin/xray" ]; then
+        if systemctl is-active --quiet xray; then
+            echo -e "Xray (VLESS) 状态: ${GREEN}已安装 且 运行中${NC}"
+        else
+            echo -e "Xray (VLESS) 状态: ${YELLOW}已安装 但 未运行(或启动失败)${NC}"
+        fi
     else
-        echo -e "Xray (VLESS) 服务: ${RED}未安装或停止${NC}"
+        echo -e "Xray (VLESS) 状态: ${RED}未安装${NC}"
     fi
     echo -e "${CYAN}--------------------${NC}\n"
 }
@@ -58,16 +62,22 @@ install_xray_core() {
     rm -f /tmp/xray.zip
 
     echo -e "${CYAN}[4/5] 生成 REALITY 密钥与配置文件...${NC}"
-    # 强制写入临时文件并进行字段精确提取
     UUID=$(/usr/local/bin/xray uuid)
     /usr/local/bin/xray x25519 > /tmp/xray_keys.txt
-    PRIVATE_KEY=$(awk '/Private/ {print $NF}' /tmp/xray_keys.txt | tr -d '\r')
-    PUBLIC_KEY=$(awk '/Public/ {print $NF}' /tmp/xray_keys.txt | tr -d '\r')
+    
+    # 兼容 Xray 新老版本的 x25519 格式提取
+    PRIVATE_KEY=$(grep -i "Private" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r')
+    PUBLIC_KEY=$(grep -i "Public" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r')
+    # 如果找不到 Public，尝试匹配新版特征 Password
+    if [[ -z "$PUBLIC_KEY" ]]; then
+        PUBLIC_KEY=$(grep -i "Password" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r')
+    fi
+    
     SHORT_ID=$(openssl rand -hex 8)
 
     # 完整性阻断校验
     if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" || -z "$UUID" ]]; then
-        echo -e "${RED}致命错误: 无法生成或提取密钥。错误追踪输出如下：${NC}"
+        echo -e "${RED}致命错误: 无法提取密钥。错误追踪输出如下：${NC}"
         cat /tmp/xray_keys.txt
         exit 1
     fi
