@@ -63,19 +63,12 @@ install_xray_core() {
 
     echo -e "${CYAN}[4/5] 生成 REALITY 密钥与配置文件...${NC}"
     UUID=$(/usr/local/bin/xray uuid)
-    /usr/local/bin/xray x25519 > /tmp/xray_keys.txt
     
-    # 兼容 Xray 新老版本的 x25519 格式提取
-    PRIVATE_KEY=$(grep -i "Private" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r')
-    PUBLIC_KEY=$(grep -i "Public" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r')
-    # 如果找不到 Public，尝试匹配新版特征 Password
-    if [[ -z "$PUBLIC_KEY" ]]; then
-        PUBLIC_KEY=$(grep -i "Password" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r')
-    fi
-    
+    /usr/local/bin/xray x25519 > /tmp/xray_keys.txt 2>&1
+    PRIVATE_KEY=$(grep -iE "Private" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r\n')
+    PUBLIC_KEY=$(grep -iE "Public|Password" /tmp/xray_keys.txt | awk -F':' '{print $2}' | tr -d ' \r\n')
     SHORT_ID=$(openssl rand -hex 8)
 
-    # 完整性阻断校验
     if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" || -z "$UUID" ]]; then
         echo -e "${RED}致命错误: 无法提取密钥。错误追踪输出如下：${NC}"
         cat /tmp/xray_keys.txt
@@ -84,7 +77,7 @@ install_xray_core() {
 
     mkdir -p /usr/local/etc/xray
     
-    cat << EOF > /usr/local/etc/xray/config.json
+    cat << IN_EOF > /usr/local/etc/xray/config.json
 {
   "inbounds": [
     {
@@ -129,11 +122,11 @@ install_xray_core() {
     }
   ]
 }
-EOF
+IN_EOF
     echo -e "-> 已生成: /usr/local/etc/xray/config.json"
 
     echo -e "${CYAN}[5/5] 创建并启动服务...${NC}"
-    cat << EOF > /etc/systemd/system/xray.service
+    cat << IN_EOF > /etc/systemd/system/xray.service
 [Unit]
 Description=Xray Service
 Documentation=https://github.com/xtls
@@ -152,7 +145,7 @@ LimitNOFILE=1000000
 
 [Install]
 WantedBy=multi-user.target
-EOF
+IN_EOF
     echo -e "-> 已生成: /etc/systemd/system/xray.service"
     
     echo "$PUBLIC_KEY" > /usr/local/etc/xray/public.key
@@ -198,7 +191,7 @@ menu_view_config() {
     echo -e "Flow: xtls-rprx-vision"
     echo -e "----------------------------------------"
     echo -e "Loon 配置参考:"
-    echo -e "${GREEN}VLESS-Reality = VLESS, $VPS_IP, $PORT, $UUID, tls=true, tls-name=$SNI, client-fingerprint=chrome, reality-public-key=$PUBLIC_KEY, reality-short-id=$SHORT_ID, flow=xtls-rprx-vision${NC}"
+    echo -e "${GREEN}VLESS-Reality = vless, $VPS_IP, $PORT, $UUID, tls=reality, tls-name=$SNI, client-fingerprint=chrome, reality-public-key=$PUBLIC_KEY, reality-short-id=$SHORT_ID, flow=xtls-rprx-vision${NC}"
 }
 
 menu_modify_config() {
