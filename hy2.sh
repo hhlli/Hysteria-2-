@@ -72,24 +72,24 @@ install_hy2() {
     echo -e "${CYAN}部署 Hysteria 2 核心...${NC}"
     bash <(curl -fsSL https://get.hy2.sh/)
     
-    if [ ! -f "$HOME/.acme.sh/acme.sh" ]; then
+    # 明确 acme.sh 路径
+    ACME_BIN="$HOME/.acme.sh/acme.sh"
+
+    if [ ! -f "$ACME_BIN" ]; then
         echo -e "${YELLOW}开始安装 acme.sh...${NC}"
         curl https://get.acme.sh | sh -s email=admin@$DOMAIN
     fi
     
-    # 确保证书申请脚本可执行
-    ACME_BIN="$HOME/.acme.sh/acme.sh"
-
+    $ACME_BIN --upgrade --auto-upgrade
+    
     echo -e "${CYAN}开始申请 TLS 证书 (首选 ZeroSSL)...${NC}"
-    # 第一次尝试：使用默认 CA (ZeroSSL)
+    # 增加申请结果判断和 Let's Encrypt 备用逻辑
     if ! $ACME_BIN --issue -d $DOMAIN --standalone --force; then
-        echo -e "${YELLOW}ZeroSSL 申请失败，正在切换至 Let's Encrypt 并重试...${NC}"
-        # 切换默认 CA 为 Let's Encrypt
+        echo -e "${YELLOW}ZeroSSL 申请失败，切换至 Let's Encrypt 并重试...${NC}"
         $ACME_BIN --set-default-ca --server letsencrypt
-        # 第二次尝试
         if ! $ACME_BIN --issue -d $DOMAIN --standalone --force; then
-            echo -e "${RED}错误: 证书申请连续失败 (ZeroSSL & Let's Encrypt)。请检查域名解析和 80 端口是否放行。${NC}"
-            return 1
+            echo -e "${RED}错误: 证书申请连续失败。请检查域名解析是否生效，以及 80 端口是否被占用或屏蔽。${NC}"
+            return 1 # 阻断后续流程
         fi
     fi
 
@@ -98,9 +98,9 @@ install_hy2() {
         --key-file /etc/hysteria/certs/server.key \
         --fullchain-file /etc/hysteria/certs/server.crt
 
-    # 验证文件是否成功生成且非空
+    # 验证证书文件是否存在且非空
     if [ ! -s /etc/hysteria/certs/server.crt ]; then
-        echo -e "${RED}错误: 证书文件安装失败，文件为空。${NC}"
+        echo -e "${RED}错误: 证书文件未成功生成。${NC}"
         return 1
     fi
 
@@ -125,7 +125,8 @@ masquerade:
 ignoreClientBandwidth: true
 EOF
 
-    chown -R hysteria:hysteria /etc/hysteria/certs
+    # 官方脚本默认以 root 运行，此命令可能报错，添加 2>/dev/null 忽略潜在错误
+    chown -R hysteria:hysteria /etc/hysteria/certs 2>/dev/null || true
     
     echo -e "${CYAN}启动服务...${NC}"
     systemctl enable --now hysteria-server
