@@ -1,15 +1,17 @@
 #!/bin/bash
 
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
-# 检查权限
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 权限运行此脚本!${NC}" && exit 1
 
-# 检查安装状态
+get_ip() {
+    VPS_IP=$(curl -s4 -m 5 api.ipify.org || curl -s4 -m 5 ifconfig.me || echo "获取失败_请手动替换IP")
+}
+
 check_status() {
     if [ -f "/usr/local/bin/anytls-server" ]; then
         if systemctl is-active --quiet anytls; then
@@ -22,7 +24,6 @@ check_status() {
     fi
 }
 
-# 1. 查看当前配置
 view_config() {
     CONF="/etc/anytls/config.json"
     if [ ! -f "$CONF" ]; then
@@ -30,22 +31,24 @@ view_config() {
         return
     fi
     
+    get_ip
     PORT=$(grep '"listen_port":' $CONF | awk -F: '{print $NF}' | tr -d '", ')
     PASSWORD=$(grep '"password":' $CONF | awk -F: '{print $2}' | tr -d '", ')
     DOMAIN=$(grep '"server_name":' $CONF | awk -F: '{print $2}' | tr -d '", ')
 
     echo -e "${GREEN}=== 当前 AnyTLS 配置 ===${NC}"
+    echo -e "节点IP:   ${YELLOW}$VPS_IP${NC}"
     echo -e "监听端口: ${YELLOW}$PORT${NC}"
     echo -e "Password: ${YELLOW}$PASSWORD${NC}"
+    echo -e "域名/SNI: ${YELLOW}$DOMAIN${NC}"
     echo -e "----------------------------------------"
     echo -e "Surge 配置参考 (已启用真实证书校验):"
     echo -e "${GREEN}AnyTLS-Node = anytls, $DOMAIN, $PORT, password=$PASSWORD, sni=$DOMAIN${NC}"
 }
 
-# 2. 修改端口和 Password
 modify_config() {
     CONF="/etc/anytls/config.json"
-    if [ ! -f "$CONF" ]; then
+    if ! [ -f "$CONF" ]; then
         echo -e "${RED}配置文件不存在，请先安装!${NC}"
         return
     fi
@@ -61,7 +64,6 @@ modify_config() {
     view_config
 }
 
-# 3. 安装功能
 install_anytls() {
     read -p "设置域名 (请输入域名): " DOMAIN
     read -p "设置端口 (默认 4430): " PORT
@@ -83,14 +85,13 @@ install_anytls() {
         echo -e "${RED}不支持的架构: $arch${NC}" && exit 1
     fi
     
-    apt update && apt install -y curl tar
-    wget -q -O /tmp/sb.tar.gz $url
+    apt update && apt install -y curl tar wget
+    wget -q -O /tmp/sb.tar.gz "$url"
     tar -xzf /tmp/sb.tar.gz -C /tmp/
     mv /tmp/sing-box-*/sing-box /usr/local/bin/anytls-server
     chmod +x /usr/local/bin/anytls-server
     rm -rf /tmp/sb.tar.gz /tmp/sing-box-*
 
-    # 证书申请与检测逻辑 (复用现有安全证书)
     if [ -f "/etc/hysteria/certs/server.crt" ]; then
         echo -e "${GREEN}检测到现有 Hysteria 2 证书，直接复用。${NC}"
         CERT_PATH="/etc/hysteria/certs/server.crt"
@@ -103,16 +104,15 @@ install_anytls() {
         echo -e "${YELLOW}未检测到可用证书，开始自动申请独立证书...${NC}"
         curl https://get.acme.sh | sh -s email=admin@$DOMAIN
         source ~/.bashrc
-        ~/.acme.sh/acme.sh --issue -d $DOMAIN --standalone --force
+        ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --force
         mkdir -p /etc/anytls/certs
-        ~/.acme.sh/acme.sh --install-cert -d $DOMAIN \
+        ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
             --key-file /etc/anytls/certs/server.key \
             --fullchain-file /etc/anytls/certs/server.crt
         CERT_PATH="/etc/anytls/certs/server.crt"
         KEY_PATH="/etc/anytls/certs/server.key"
     fi
 
-    # 生成标准的 Sing-box AnyTLS 服务端配置
     mkdir -p /etc/anytls
     cat << EOF > /etc/anytls/config.json
 {
@@ -149,7 +149,6 @@ install_anytls() {
 }
 EOF
 
-    # 创建 Systemd 服务
     cat << EOF > /etc/systemd/system/anytls.service
 [Unit]
 Description=AnyTLS Server Service (Sing-box Core)
@@ -178,38 +177,76 @@ EOF
     echo -e "${GREEN}========================================${NC}"
 }
 
-# 卸载功能
 uninstall_anytls() {
-    echo -e "${YELLOW}正在卸载 AnyTLS...${NC}"
-    systemctl stop anytls
-    systemctl disable anytls
-    rm -f /usr/local/bin/anytls-server
-    rm -rf /etc/anytls
-    rm -f /etc/systemd/system/anytls.service
-    systemctl daemon-reload
-    echo -e "${GREEN}卸载完成。${NC}"
+    read -p "确认卸载 AnyTLS? (y/N): " CONFIRM
+    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}正在卸载 AnyTLS...${NC}"
+        systemctl stop anytls
+        systemctl disable anytls
+        rm -f /usr/local/bin/anytls-server
+        rm -rf /etc/anytls
+        rm -f /etc/systemd/system/anytls.service
+        systemctl daemon-reload
+        echo -e "${GREEN}卸载完成。${NC}"
+    fi
 }
 
-# 主菜单
-clear
-echo -e "${GREEN}AnyTLS 高级服务端 一键管理脚本 (基于 Sing-box)${NC}"
-check_status
-echo "--------------------------------"
-echo "1. 安装 / 覆盖安装"
-echo "2. 卸载"
-echo "3. 重启服务"
-echo "4. 查看实时日志"
-echo "5. 查看当前配置"
-echo "6. 修改端口和 Password"
-echo "7. 退出"
-read -p "请选择 [1-7]: " opt
+check_update() {
+    echo -e "${CYAN}--- 版本检查 ---${NC}"
+    
+    if [ -f "/usr/local/bin/anytls-server" ]; then
+        LOCAL_VER=$(/usr/local/bin/anytls-server version | head -n 1 | awk '{print $3}')
+        echo -e "当前本地 Sing-box 核心版本: ${LOCAL_VER:-未知}"
+    else
+        echo -e "${RED}未安装 AnyTLS (Sing-box 核心)。${NC}"
+    fi
+    
+    echo -e "${YELLOW}正在获取 GitHub 最新版本信息...${NC}"
+    
+    LATEST_SB=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/')
+    echo -e "Sing-box GitHub 最新版本: ${LATEST_SB:-获取失败}"
+    
+    LATEST_ANYTLS=$(curl -s https://api.github.com/repos/anytls/anytls-rs/releases/latest | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/')
+    if [[ -z "$LATEST_ANYTLS" ]]; then
+        LATEST_ANYTLS=$(curl -s https://api.github.com/repos/anytls/anytls-go/tags | grep '"name":' | head -n 1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+    fi
+    echo -e "AnyTLS (官方协议库) GitHub 最新版本: ${LATEST_ANYTLS:-获取失败}"
+    
+    echo -e "${CYAN}----------------${NC}"
+    echo -e "注: 本服务端基于 Sing-box 运行，AnyTLS 协议已内嵌。若需更新，选择 [1] 执行覆盖安装即可拉取最新 Sing-box 核心。"
+}
 
-case $opt in
-    1) install_anytls ;;
-    2) uninstall_anytls ;;
-    3) systemctl restart anytls && echo -e "${GREEN}已重启${NC}" ;;
-    4) journalctl -u anytls -f ;;
-    5) view_config ;;
-    6) modify_config ;;
-    *) exit 0 ;;
-esac
+while true; do
+    clear
+    echo -e "${GREEN}AnyTLS 高级服务端 一键管理脚本 (基于 Sing-box)${NC}"
+    check_status
+    echo "--------------------------------"
+    echo "1. 安装 / 覆盖安装"
+    echo "2. 卸载"
+    echo "3. 重启服务"
+    echo "4. 查看运行状态 (实时日志)"
+    echo "5. 查看当前配置"
+    echo "6. 修改端口和 Password"
+    echo "7. 检查更新"
+    echo "8. 退出"
+    read -p "请选择 [1-8]: " opt
+
+    echo -e "\n"
+    case $opt in
+        1) install_anytls ;;
+        2) uninstall_anytls ;;
+        3) systemctl restart anytls && echo -e "${GREEN}已重启${NC}" ;;
+        4) 
+           echo -e "${YELLOW}已打开日志分页查看模式，按 'q' 即可退出并返回菜单。${NC}"
+           journalctl -u anytls -e 
+           ;;
+        5) view_config ;;
+        6) modify_config ;;
+        7) check_update ;;
+        8) echo -e "${CYAN}已退出脚本。${NC}"; exit 0 ;;
+        *) echo -e "${RED}无效选择。${NC}" ;;
+    esac
+    
+    echo -e "\n"
+    read -n 1 -s -r -p "按任意键返回主菜单..."
+done
